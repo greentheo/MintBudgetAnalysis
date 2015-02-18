@@ -1,0 +1,338 @@
+---
+title: "BudgetAnalysis"
+author: "Theodore Van Rooy"
+date: "February 2, 2015"
+output: html_document
+runtime: shiny
+---
+
+```{r echo=FALSE}
+library(ggplot2)
+library(shiny)
+library(dplyr)
+library(lubridate)
+library(rNVD3)
+
+allData=read.csv('data//transactions.csv')
+allData=read.csv('data//investments.csv')
+#investments require some trickiness...  you're buying in, but not selling... specific to TD Ameritrade below)
+
+
+allData$DateL = mdy(allData$Date)
+    allData$Amount = ifelse(allData$Transaction.Type=="debit", -1*allData$Amount, allData$Amount)
+    #normalize amount to 1
+    #allData[["AmountNorm"]] = allData$Amount/max(abs(allData$Amount))
+    allData = allData[with(allData, order(DateL)), ]
+
+inputPanel({
+  fileInput('transactions', 'Choose Transactions CSV Export from Mint (Checking & Savings Accounts)',
+                accept=c('text/csv', 
+    						 'text/comma-separated-values,text/plain', 
+								 '.csv'))#,
+  #
+})
+inputPanel({
+  fileInput('investments', 'Choose Investments CSV Export from Mint',
+                accept=c('text/csv', 
+      					 'text/comma-separated-values,text/plain', 
+								 '.csv'))#,
+  #
+})
+# inputPanel({
+#   fileInput('loans', 'Choose Loans CSV Export from Mint',
+#                 accept=c('text/csv', 
+#       					 'text/comma-separated-values,text/plain', 
+# 								 '.csv'))#,
+#   #
+# })
+
+inputPanel({
+  dateRangeInput('dateRange', label = 'Date Range',start = Sys.Date()-30)
+})
+
+
+data = reactive({
+  transactions=input$transactions
+  investments=input$investments
+  loans=input$loans
+  if (is.null(transactions) & is.null(investments) & is.null(loans))
+      return(NULL)
+  allData=NULL
+  data=NULL
+  if(!is.null(transactions)){
+    data = read.csv(transactions$datapath)
+    #data = read.csv('data//transactions.csv')
+    data$DateL = mdy(data$Date)
+    data$Amount = ifelse(data$Transaction.Type=="debit", -1*data$Amount, data$Amount)
+    #normalize amount to 1
+    #data[["AmountNorm"]] = data$Amount/max(abs(data$Amount))
+    data = data[with(data, order(DateL)), ]
+    data = data %.%
+      filter(DateL>=ymd(input$dateRange[1])  & DateL<=ymd(input$dateRange[2]))
+    if(is.null(allData)){
+      allData=data
+    }else{
+      allData = rbind(allData,data)
+      allData = allData[with(allData, order(DateL)), ]
+    }
+  }
+  
+  iData=NULL
+  if(!is.null(investments)){
+    iData = read.csv(investments$datapath)
+    #iData = read.csv('data/investments.csv')
+    iData$DateL = mdy(iData$Date)
+    iData$Amount = ifelse(iData$Transaction.Type=="debit", -1*iData$Amount, iData$Amount)
+    #normalize amount to 1
+    #iData$Amount = iData$Amount/max(abs(iData$Amount))
+    iData = iData[with(iData, order(DateL)), ]
+    iData = iData %.%
+      filter(DateL>=ymd(input$dateRange[1])  & DateL<=ymd(input$dateRange[2]))
+    
+    ##remove from accounting the money market and buying and selling of stocks (for TDAmeritrade)
+    iData = subset(iData, Description!="MONEY MARKET PURCHASE" & Description!="MONEY MARKET REDEMPTION")
+    iData = iData[ -grep("Sold", iData$Description),]
+    iData = iData[ -grep("Bought", iData$Description),]
+    if(is.null(allData)){
+      allData=iData
+    }else{
+      allData=rbind(allData, iData)  
+      allData = allData[with(allData, order(DateL)), ]
+    }
+  }
+  
+  lData=NULL
+  if(!is.null(loans)){
+    lData = read.csv(loans$datapath)
+    lData$DateL = mdy(lData$Date)
+    lData$Amount = ifelse(lData$Transaction.Type=="debit", -1*lData$Amount, lData$Amount)
+    #normalize amount to 1
+    #lData$Amount = lData$Amount/max(abs(lData$Amount))
+    lData = lData[with(lData, order(DateL)), ]
+    lData = lData %.%
+      filter(DateL>=ymd(input$dateRange[1])  & DateL<=ymd(input$dateRange[2]))
+   
+    #loan data doesn't add to liquid assetts, it adds to net worth... we will only analyze the
+    #the rate at which payments to loans are increasing and if they are in proportion to income
+  }
+  
+  
+  return(list(allData=allData, transactions=data, investments=iData, loans=lData))
+})
+
+renderPlot({
+  if(is.null(data()$allData)){
+    return(NULL)
+  }
+ 
+ggplot(data()$allData, aes(x=DateL, y=(cumsum(Amount))))+geom_line()+geom_smooth()+
+  labs('Cumulative cashflow (income-expenses)', x="Time", y="Net $")
+})
+
+
+# renderPlot({
+#   if(is.null(data())){
+#     return(NULL)
+#   }
+# #ggplot(data, aes(x=DateL, y=cumsum(Amount), color=Account.Name))+geom_line()
+# ggplot(data, aes(x=DateL, y=cumsum(Amount), color=Category))+geom_line()+
+#   facet_wrap(~Account.Name)
+# })
+
+
+```
+
+
+### Analysis by Accounts
+
+```{r echo=FALSE}
+
+inputPanel({
+  textInput(inputId = 'accountFilter', label = 'Account Name filter - Use a comma Separated list to specify accounts to be used.',value = '*')  
+})
+
+multifilter = function(filterText, x){
+  if(filterText=='') filterText='*'
+  filters = strsplit(filterText,split = ",")[[1]]
+  filteredX = c()
+  for(i in 1:length(filters)){
+    if(length(grep('^-',filters[i]))>0){
+      filteredX=union(filteredX, -grep(tolower(gsub('^-',replacement = '',filters[i])), tolower(x)))
+    }else{
+      filteredX = union(filteredX, grep(tolower(filters[i]), tolower(x)))  
+    }
+    
+  }
+  return(filteredX)
+}
+
+
+renderDataTable({
+  if(is.null(data()$allData))
+    return(NULL)
+  
+  df =  data()$allData[multifilter(input$accountFilter, data()$allData$Account.Name),] %.% #grep(tolower(input$accountFilter), tolower(data()$allData$Account.Name)), ] %.%
+    group_by(Account.Name) %.%
+    summarize(transactions = length(Account.Name),
+              sumDebits = sum(ifelse(Amount<0, Amount,0)),
+              netBalance = sum(Amount),
+              avgDebit = quantile(Amount[which(Amount<0)], .5, na.rm=T),
+              avgCredit = mean(Amount[which(Amount>0)])
+              )
+  
+  
+})
+renderPlot({
+  df = data()$allData[multifilter(input$accountFilter, data()$allData$Account.Name), ]
+  df = with(df, df[order(DateL),])
+  ggplot(df, aes(x=DateL, y=(cumsum(Amount))))+geom_line()+geom_smooth()+
+  labs(title='Cumulative cashflow (income-expenses)', x="Time", y="Net $")
+})
+
+renderPlot({
+  sumBymonthDay = data()$allData[multifilter(input$accountFilter, data()$allData$Account.Name), ] %.%
+    mutate(month=format(DateL, "%m"),
+           year=format(DateL, "%Y")) %.%
+    group_by(month,year) %.%
+    summarize(avgSpend = sum(Amount[which(Amount<0)])) %.%
+    summarize(avgSpend = mean(avgSpend)) %.%            
+    arrange(month)
+  
+  ggplot(sumBymonthDay, aes(x=month, y=avgSpend))+geom_bar(stat = "identity")+
+  labs(title='Cash Out Flow by Month per Year', x="Month", y="Avg $ / Year")
+})
+
+renderPlot({
+  sumBymonthDay = data()$allData[multifilter(input$accountFilter, data()$allData$Account.Name), ] %.%
+    group_by(DateL) %.%
+    summarize(Amount=sum(Amount[Amount<0])) %.%
+    mutate(monthDay=format(DateL, "%e")) %.%
+    group_by(monthDay) %.%
+    summarize(avgSpend = quantile(Amount, .5, na.rm=T)) %.%
+    arrange(monthDay)
+  
+  ggplot(sumBymonthDay, aes(x=monthDay, y=(avgSpend)))+geom_bar(stat="identity")+
+  labs(title='Cash Outflow by Day of Month', x="Day of Month", y="Avg $")
+})
+
+renderPlot({
+  sumBymonthDay = data()$allData[multifilter(input$accountFilter, data()$allData$Account.Name), ] %.%
+    group_by(DateL) %.%
+    summarize(Amount=sum(Amount[Amount<0])) %.%
+    mutate(monthDay=format(DateL, "%u")) %.%
+    group_by(monthDay) %.%
+    summarize(avgSpend = quantile(Amount, .5, na.rm=T)) %.%
+    arrange(monthDay)
+  
+  ggplot(sumBymonthDay, aes(x=monthDay, y=avgSpend))+geom_bar(stat = "identity")+
+  labs(title='Cash Outflow by Day of Week', x="Day of Week", y="Avg $")
+})
+
+
+
+```
+
+### Analysis by Categories
+```{r echo=FALSE}
+
+inputPanel({
+  textInput(inputId = 'catFilter', label = 'Category Filter - A comma seperated list of Categories',value = '*')  
+})
+
+
+renderDataTable({
+  
+  
+  if(is.null(data()$allData))
+    return(NULL)
+  
+  df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+  
+  df %.%
+    group_by(Category) %.%
+    summarize(transactions = length(Account.Name),
+              sumDebits = sum(ifelse(Amount<0, Amount,0)),
+              avgDebit = quantile(Amount[which(Amount<0)], .5, na.rm=T),
+              sumCredit = sum(Amount[Amount>0]),
+              avgCredit = quantile(Amount[Amount>0], .5, na.rm=T)
+              )
+  
+  
+})
+renderPlot({
+  df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+  
+  dataP = with(df, df[order(DateL),] )
+  ggplot(dataP, aes(x=DateL, y=(cumsum(Amount))))+geom_line()+geom_smooth()+
+    geom_line()+
+  labs(title='Cumulative cash outflow velocity (income-expenses)', x="Time", y="Net $")
+})
+
+renderPlot({
+  df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+  
+  dataP = with(df, df[order(DateL),] )
+  ggplot(dataP, aes(x=DateL, y=(cumsum(Amount)), color=Category ))+geom_line()+
+    geom_line()+
+  labs(title='Cumulative cash outflow velocity (income-expenses) by Category', x="Time", y="Net $")
+})
+
+
+
+```
+
+
+
+
+## Emergency Fund
+
+To get a 3 month savings fund which covers all debits for any 3 month period for the above selected accounts and categories.
+
+
+```{r echo=FALSE}
+
+renderPlot({
+ df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+               
+df =  df %.%
+  group_by(DateL) %.%
+  summarize(debits=sum(Amount[Amount<0]))
+
+e = rep(0, 1000)
+for(i in 1:length(e)){
+  e[i] = -sum(df$debits[sample(1:(nrow(df)), 90,replace = T)])
+}
+
+print(summary(e))
+qplot(x = e,stat = "density")+
+  labs(title="Distribution of 90 day expenses", x="$")
+})
+
+renderText({
+ df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+               
+df =  df %.%
+  group_by(DateL) %.%
+  summarize(debits=sum(Amount[Amount<0]))
+
+e = rep(0, 1000)
+for(i in 1:length(e)){
+  e[i] = -sum(df$debits[sample(1:(nrow(df)), 90,replace = T)])
+}
+
+
+
+  paste("You need on average: ", round(quantile(e, .5)), "$ for any 90 day period of expenses.  Your range of 90 day expenses is between ", round(quantile(e, .10)), "and ", round(quantile(e, .90)), "$ about 80% of the time")
+
+  
+})
+
+```
+
+
+
