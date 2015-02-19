@@ -13,8 +13,8 @@ library(dplyr)
 library(lubridate)
 library(rNVD3)
 
-allData=read.csv('data//transactions.csv')
-allData=read.csv('data//investments.csv')
+#allData=read.csv('data//transactions.csv')
+#allData=read.csv('data//investments.csv')
 #investments require some trickiness...  you're buying in, but not selling... specific to TD Ameritrade below)
 
 
