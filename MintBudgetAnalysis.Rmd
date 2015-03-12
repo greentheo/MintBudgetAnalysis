@@ -18,11 +18,11 @@ library(rNVD3)
 #investments require some trickiness...  you're buying in, but not selling... specific to TD Ameritrade below)
 
 
-allData$DateL = mdy(allData$Date)
-    allData$Amount = ifelse(allData$Transaction.Type=="debit", -1*allData$Amount, allData$Amount)
-    #normalize amount to 1
-    #allData[["AmountNorm"]] = allData$Amount/max(abs(allData$Amount))
-    allData = allData[with(allData, order(DateL)), ]
+# allData$DateL = mdy(allData$Date)
+#     allData$Amount = ifelse(allData$Transaction.Type=="debit", -1*allData$Amount, allData$Amount)
+#     #normalize amount to 1
+#     #allData[["AmountNorm"]] = allData$Amount/max(abs(allData$Amount))
+#     allData = allData[with(allData, order(DateL)), ]
 
 inputPanel({
   fileInput('transactions', 'Choose Transactions CSV Export from Mint (Checking & Savings Accounts)',
