@@ -255,19 +255,64 @@ renderDataTable({
               sumDebits = sum(ifelse(Amount<0, Amount,0)),
               avgDebit = quantile(Amount[which(Amount<0)], .5, na.rm=T),
               sumCredit = sum(Amount[Amount>0]),
-              avgCredit = quantile(Amount[Amount>0], .5, na.rm=T)
+              netBalance = sum(Amount[Amount>0])+sum(ifelse(Amount<0, Amount,0))
               )
   
   
+})
+
+inputPanel({
+  numericInput(inputId = 'plotOffset', label = 'Offset y values by',value = '0')  
 })
 renderPlot({
   df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
   df = df[multifilter(input$catFilter, df$Category), ]
   
   dataP = with(df, df[order(DateL),] )
-  ggplot(dataP, aes(x=DateL, y=(cumsum(Amount))))+geom_line()+geom_smooth()+
+  dataP$Amount[1] = dataP$Amount[1]+input$plotOffset
+  ggplot(dataP, aes(x=DateL, y=(cumsum(Amount))))+geom_line()+geom_smooth(method="lm")+
     geom_line()+
   labs(title='Cumulative cash outflow velocity (income-expenses)', x="Time", y="Net $")
+})
+
+inputPanel({
+  numericInput(inputId = 'daysOut', label = 'Days Out to Predict',value = '30')  
+})
+renderPlot({
+  df =  data()$allData[ multifilter(input$accountFilter, data()$allData$Account.Name), ] 
+  df = df[multifilter(input$catFilter, df$Category), ]
+  dataP = with(df, df[order(DateL),] ) %>%
+    group_by(DateL) %>%
+    summarize(sumAmount=sum(Amount))
+  dataP$cumAmount = cumsum(dataP$sumAmount)+input$plotOffset
+  
+  dataP[["dow"]] = wday(dataP$DateL)
+  dataP[["dom"]] = mday(dataP$DateL)
+  dataP[["day"]] = 1:nrow(dataP)
+  model = lm(cumAmount~day+dow+dom, data=dataP)
+  
+  maxDate = max(dataP$DateL)
+  print(maxDate)
+  dateSeq = seq.Date(as.Date(maxDate), as.Date(maxDate+edays(input$daysOut)), by="1 day")
+  newDat = data.frame(day=nrow(dataP):(nrow(dataP)+input$daysOut),
+                      dow=wday(ymd(dateSeq)),
+                      dom=mday(ymd(dateSeq)))
+ 
+  predDat = data.frame(cumAmount = c(dataP$cumAmount,
+                                     predict(model, newdata = dataP),
+                                     predict(model, newdata = newDat)),
+                       DateL = c(as.Date(dataP$DateL),
+                                 as.Date(dataP$DateL),
+                                 as.Date(dateSeq)),
+                       type = c(rep("Actual", nrow(dataP)),
+                                rep("Modeled", nrow(dataP)),
+                                rep("Predicted", length(dateSeq)))
+                       )
+  print(newDat)
+  print(dataP)
+  ggplot(predDat, aes(x=DateL, y=cumAmount, color=type))+geom_line()
+                       
+  
 })
 
 renderPlot({
